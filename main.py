@@ -28,10 +28,7 @@ for i, file in enumerate(csvfiles):
     print(i, ": ", len(pds[i].columns))
 
 # some files have 8 columns while most have 10. remove the ones that dont have 9 columns
-for i, element in enumerate(pds):
-    if (len(element.columns) != 10):
-        pds.pop(i)
-
+pds = [x for x in pds if not len(x.columns) != 10]
 # check the number of columns in each panda
 for element in pds:
     print(len(element.columns))
