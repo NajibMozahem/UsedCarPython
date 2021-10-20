@@ -1,11 +1,15 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import sklearn.preprocessing
 from matplotlib.pyplot import cm
 import seaborn as sns
 import pandas as pd
 import glob
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn_pandas import DataFrameMapper
+import sklearn.preprocessing
 
 # get the list of data files
 csvfiles = []
@@ -28,7 +32,10 @@ for i, file in enumerate(csvfiles):
     print(i, ": ", len(pds[i].columns))
 
 # some files have 8 columns while most have 10. remove the ones that dont have 9 columns
-pds = [x for x in pds if not len(x.columns) != 10]
+for i, element in enumerate(pds):
+    if (len(element.columns) != 10):
+        pds.pop(i)
+
 # check the number of columns in each panda
 for element in pds:
     print(len(element.columns))
@@ -140,11 +147,23 @@ the_data[the_data.select_dtypes(["object"]).columns] = the_data[the_data.select_
 # now create the train and test data sets
 y = the_data["price"]
 x = the_data.loc[:, the_data.columns != "price"]
-# convert categories to dummies
-x1 = pd.get_dummies(data=x, drop_first=True)
+# do some transformation. I only want to turn the categorical columns to binary indicators
+mapper = DataFrameMapper([
+    (["year"], None),
+    (["mileage"], None),
+    (["tax"], None),
+    (["mpg"], None),
+    (["engineSize"], None),
+    ("type", sklearn.preprocessing.LabelBinarizer()),
+    ("fuelType", sklearn.preprocessing.LabelBinarizer()),
+    ("transmission", sklearn.preprocessing.LabelBinarizer()),
+    ("model", sklearn.preprocessing.LabelBinarizer())
+], df_out=True)
+x_transformed = mapper.fit_transform(x)
+
 # add again the categorical type column because it will be useful later
-x = pd.concat([x1, x["type"]], axis=1)
-x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2)
+x_transformed = pd.concat([x_transformed, x["type"]], axis=1)
+x_train, x_test, y_train, y_test = train_test_split(x_transformed, y, test_size=0.2)
 # fit linear regression without including the categorical column type
 lm = LinearRegression()
 lm.fit(x_train.loc[:, x_train.columns != "type"], y_train)
@@ -178,3 +197,8 @@ for label, df in check[["yhat", "price", "type"]].groupby("type"):
         column += 1
     if column == 0:
         row += 1
+
+
+
+
+
