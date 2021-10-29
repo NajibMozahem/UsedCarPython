@@ -6,10 +6,11 @@ import seaborn as sns
 import pandas as pd
 import glob
 from sklearn.linear_model import LinearRegression
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import PolynomialFeatures
+from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn_pandas import DataFrameMapper
 import sklearn.preprocessing
+from sklearn.metrics import mean_squared_error
+from sklearn.tree import DecisionTreeRegressor
 
 # get the list of data files
 csvfiles = []
@@ -19,8 +20,8 @@ for file in glob.glob("data/*.csv"):
 # look at the names
 csvfiles
 # remove the unclean files
-csvfiles.remove("data/unclean focus.csv")
-csvfiles.remove("data/unclean cclass.csv")
+csvfiles.remove("data\\unclean focus.csv")
+csvfiles.remove("data\\unclean cclass.csv")
 
 # read  into a pandas array the files into pandas and print number of columns from each file
 # also, create a new column with the name of the car
@@ -31,10 +32,9 @@ for i, file in enumerate(csvfiles):
     pds[i]["type"] = name
     print(i, ": ", len(pds[i].columns))
 
-# some files have 8 columns while most have 10. remove the ones that dont have 9 columns
-for i, element in enumerate(pds):
-    if (len(element.columns) != 10):
-        pds.pop(i)
+# some files have 8 columns while most have 10. remove the ones that dont have 10 columns
+
+pds = [x for x in pds if not len(x.columns) != 10]
 
 # check the number of columns in each panda
 for element in pds:
@@ -102,7 +102,6 @@ type_year_count.drop("total", 1, inplace=True)
 type_year_count.plot(kind="bar", stacked = True)
 plt.legend(ncol=5, loc = "upper left")
 
-
 # we now produce the same graph but for fuel type
 type_fuel_count = the_data[["fuelType", "type"]].groupby(["type", "fuelType"]).size().reset_index(name="counts")
 # pivot the table to wide format
@@ -141,43 +140,66 @@ sns.lmplot(x="mileage", y="price", hue="type", scatter=False, lowess=True, ci=No
 # let us look at the correlation between price and the other variables
 the_data.corr().sort_values("price").loc[:, "price"][the_data.corr()["price"] != 1.0].plot(kind="bar")
 plt.xticks(rotation=0)
-# linear regression
+
 # first convert string to categories
 the_data[the_data.select_dtypes(["object"]).columns] = the_data[the_data.select_dtypes(["object"]).columns].apply(lambda x: x.astype("category"))
-# now create the train and test data sets
-y = the_data["price"]
-x = the_data.loc[:, the_data.columns != "price"]
-# do some transformation. I only want to turn the categorical columns to binary indicators
+
+# now transform the variables in the train sets using a mapper
+# i transform before splitting in order to have same columns in train and test sets
 mapper = DataFrameMapper([
-    (["year"], None),
-    (["mileage"], None),
-    (["tax"], None),
-    (["mpg"], None),
-    (["engineSize"], None),
+    (["year"], sklearn.preprocessing.StandardScaler()),
+    (["mileage"], sklearn.preprocessing.StandardScaler()),
+    (["tax"], sklearn.preprocessing.StandardScaler()),
+    (["mpg"], sklearn.preprocessing.StandardScaler()),
+    (["engineSize"], sklearn.preprocessing.StandardScaler()),
     ("type", sklearn.preprocessing.LabelBinarizer()),
     ("fuelType", sklearn.preprocessing.LabelBinarizer()),
     ("transmission", sklearn.preprocessing.LabelBinarizer()),
-    ("model", sklearn.preprocessing.LabelBinarizer())
+    ("model", sklearn.preprocessing.LabelBinarizer()),
+    ("price", None)
 ], df_out=True)
-x_transformed = mapper.fit_transform(x)
+the_data_transformed = mapper.fit_transform(the_data)
+# add again the categorical type column because it will be useful later and we need it for
+# the stratified sampling since this column represents the groups
+the_data_transformed = pd.concat([the_data_transformed, the_data["type"]], axis=1)
+# now split the data set using stratified sampling using the variable type
+split = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=8)
+for train_index, test_index in split.split(the_data_transformed, the_data_transformed["type"]):
+    strat_train_set = the_data_transformed.iloc[train_index]
+    strat_test_set = the_data_transformed.iloc[test_index]
 
-# add again the categorical type column because it will be useful later
-x_transformed = pd.concat([x_transformed, x["type"]], axis=1)
-x_train, x_test, y_train, y_test = train_test_split(x_transformed, y, test_size=0.2)
-# fit linear regression without including the categorical column type
+# now create copies of train and test sets for x and y
+x_train = strat_train_set.drop(["price", "type"], axis=1)
+y_train = strat_train_set["price"]
+x_test = strat_test_set.drop(["price", "type"], axis=1)
+y_test = strat_test_set["price"]
+
+# linear regression
 lm = LinearRegression()
-lm.fit(x_train.loc[:, x_train.columns != "type"], y_train)
-# get the r-squared value
-lm.score(x_test.loc[:, x_test.columns != "type"], y_test)
+lm.fit(x_train, y_train)
 # calculate predicted values for the test set
-yhat = lm.predict(x_test.loc[:, x_test.columns != "type"])
-# convert to a data frame with a column name
-yhat = pd.DataFrame(yhat)
-yhat.columns = ["yhat"]
+yhat_lm = lm.predict(x_test)
+# get the RMSE
+np.sqrt(mean_squared_error(y_test, yhat_lm))
+
+# Decision tree
+tree_reg = DecisionTreeRegressor()
+tree_reg.fit(x_train, y_train)
+yhat_tree = tree_reg.predict(x_test)
+np.sqrt(mean_squared_error(y_test, yhat_tree))
+tree_reg.score(x_test, y_test)
+
+# the RMSE for the decision tree is much smaller. We therefore go with it. It also has a good R2 value
+# on the test set
+
+# convert yhat to data frame to concatenate it with other data frames for producing the figures later
+yhat_tree = pd.DataFrame(yhat_tree)
+yhat_tree.columns = ["yhat_tree"]
 # create data frame that contains the independent variables in the test set, the price in the test set, and the predicted values of the prices
 check = pd.concat([x_test.reset_index().drop("index", 1),
+                   strat_test_set["type"].reset_index().drop("index", 1),
                    y_test.reset_index().drop("index", 1),
-                   yhat.reset_index().drop("index", 1)], axis=1)
+                   yhat_tree.reset_index().drop("index", 1)], axis=1)
 # now plot the predicted vs actual for each car type
 # the line represents x=x which is the ideal situation
 # create colors to iterate through
@@ -185,9 +207,9 @@ color = iter(cm.rainbow(np.linspace(0, 1, 9)))
 fig, ax = plt.subplots(3, 3)
 row = 0
 column = 0
-for label, df in check[["yhat", "price", "type"]].groupby("type"):
+for label, df in check[["yhat_tree", "price", "type"]].groupby("type"):
     c = next(color)
-    ax[row, column].scatter(x="yhat", y="price", data=df, alpha = 0.2, c=c)
+    ax[row, column].scatter(x="yhat_tree", y="price", data=df, alpha = 0.2, c=c)
     ax[row, column].axline([0, 0], [1, 1], color="black")
     ax[row, column].tick_params(axis="both", which="major", labelsize=6)
     ax[row, column].set_title(label)
